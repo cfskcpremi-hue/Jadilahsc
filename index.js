@@ -1,6 +1,6 @@
 // ============================================
 // KANCIL VPN RAILWAY GATEWAY
-// Clean Short Path + Cyberpunk Dashboard + Full UDP
+// Based on Working Base + Custom Paths + UI
 // ============================================
 
 const http = require('http');
@@ -12,7 +12,7 @@ const url = require('url');
 const PORT = process.env.PORT || 3000;
 const SYSTEM_UUID = process.env.SYSTEM_UUID || "c48619fe-8f02-49e0-b9e9-edf763e17e21";
 
-// Mapping Path Spesifik
+// Mapping Custom Path ke IP Target
 const PROXY_MAP = {
   "id-akamai": "172.232.249.224:2053",
   "id-deneva": "202.155.95.132:443",
@@ -32,6 +32,7 @@ const CORS_HEADERS = {
 
 class GatewayServer {
   constructor() {
+    this.prxIP = "104.64.192.116:443";
     this.wss = null;
     this.activeUDPConnections = new Map();
   }
@@ -144,7 +145,7 @@ class GatewayServer {
           </div>
 
           <div>
-            <label class="text-xs text-slate-400 block mb-1">Pilih Path Proxy</label>
+            <label class="text-xs text-slate-400 block mb-1">Pilih Target Path Proxy</label>
             <select id="path" class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-emerald-300 font-mono">
               <option value="id-akamai">🇮🇩 /id-akamai (172.232.249.224:2053)</option>
               <option value="id-deneva" selected>🇮🇩 /id-deneva (202.155.95.132:443)</option>
@@ -223,23 +224,20 @@ class GatewayServer {
 
   async handleWebSocketConnection(ws, request) {
     try {
-      const urlObj = new URL(request.url, `http://${request.headers.host}`);
-      // Ambil segmen pertama dari path (misal "id-deneva")
-      const rawPath = urlObj.pathname.split('/').filter(Boolean)[0] || "";
+      const parsedUrl = url.parse(request.url, true);
+      const rawPath = parsedUrl.pathname.replace("/", "");
 
-      const targetProxy = PROXY_MAP[rawPath];
-      if (!targetProxy) {
-        if (ws.readyState === WebSocket.OPEN) ws.close(1000, 'Unknown Path');
-        return;
+      if (PROXY_MAP[rawPath]) {
+        this.prxIP = PROXY_MAP[rawPath];
       }
 
-      await this.websocketHandler(ws, targetProxy);
+      await this.websocketHandler(ws);
     } catch (err) {
       if (ws.readyState === WebSocket.OPEN) ws.close(1011, 'Internal Error');
     }
   }
 
-  async websocketHandler(ws, targetProxy) {
+  async websocketHandler(ws) {
     let remoteSocketWrapper = { value: null };
 
     ws.on('message', async (message) => {
@@ -263,7 +261,7 @@ class GatewayServer {
           return await this.handleUDPOutbound(header.addressRemote, header.portRemote, chunk.slice(header.rawDataIndex), ws, header.version);
         }
 
-        this.handleTCPOutBound(remoteSocketWrapper, targetProxy, header.rawClientData, ws);
+        this.handleTCPOutBound(remoteSocketWrapper, header.addressRemote, header.portRemote, header.rawClientData, ws, header.version);
       } catch (err) {
         if (ws.readyState === WebSocket.OPEN) ws.close(1011, err.message);
       }
@@ -287,25 +285,36 @@ class GatewayServer {
     return "ss";
   }
 
-  async handleTCPOutBound(remoteSocket, targetProxy, rawClientData, webSocket) {
-    const [targetHost, targetPortStr] = targetProxy.split(":");
-    const targetPort = parseInt(targetPortStr, 10);
+  async handleTCPOutBound(remoteSocket, addressRemote, portRemote, rawClientData, webSocket, responseHeader) {
+    const connectAndWrite = (address, port) => new Promise((resolve, reject) => {
+      const s = net.createConnection({ host: address, port }, () => {
+        s.write(rawClientData);
+        resolve(s);
+      });
+      s.on('error', reject);
+    });
+
+    const retry = async () => {
+      try {
+        const parts = this.prxIP.split(":");
+        const s = await connectAndWrite(parts[0], parseInt(parts[1], 10) || 443);
+        remoteSocket.value = s;
+        s.on('close', () => { if (webSocket.readyState === WebSocket.OPEN) webSocket.close(); });
+        s.on('error', () => { if (webSocket.readyState === WebSocket.OPEN) webSocket.close(); });
+        this.remoteSocketToWS(s, webSocket, responseHeader, null);
+      } catch (e) {
+        if (webSocket.readyState === WebSocket.OPEN) webSocket.close();
+      }
+    };
 
     try {
-      const s = net.createConnection({ host: targetHost, port: targetPort }, () => {
-        s.write(rawClientData);
-      });
-
+      const s = await connectAndWrite(addressRemote, portRemote);
       remoteSocket.value = s;
-
-      s.on('data', (data) => {
-        if (webSocket.readyState === WebSocket.OPEN) webSocket.send(data);
-      });
-
       s.on('close', () => { if (webSocket.readyState === WebSocket.OPEN) webSocket.close(); });
       s.on('error', () => { if (webSocket.readyState === WebSocket.OPEN) webSocket.close(); });
+      this.remoteSocketToWS(s, webSocket, responseHeader, retry);
     } catch (e) {
-      if (webSocket.readyState === WebSocket.OPEN) webSocket.close();
+      await retry();
     }
   }
 
@@ -313,6 +322,8 @@ class GatewayServer {
     try {
       let header = responseHeader;
       let destAddress = targetAddress;
+
+      // Pengalihan DNS Port 53 ke Public DNS
       if (targetPort === 53) {
         destAddress = DNS_SERVERS[Math.floor(Math.random() * DNS_SERVERS.length)];
       }
@@ -336,6 +347,7 @@ class GatewayServer {
         }
       });
 
+      // Auto disconnect UDP socket setelah 15 detik untuk hemat memori Railway
       setTimeout(() => {
         try { sock.close(); } catch (_) {}
         this.activeUDPConnections.delete(key);
@@ -386,6 +398,21 @@ class GatewayServer {
     const pi = avi + al;
     const pr = db.readUInt16BE(pi);
     return { hasError: false, addressRemote: av, portRemote: pr, rawDataIndex: pi+4, rawClientData: db.slice(pi+4), version: null, isUDP: udp };
+  }
+
+  remoteSocketToWS(remoteSocket, webSocket, responseHeader, retry) {
+    let header = responseHeader, hasData = false;
+    remoteSocket.on('data', (chunk) => {
+      hasData = true;
+      if (webSocket.readyState !== WebSocket.OPEN) { remoteSocket.destroy(); return; }
+      if (header) {
+        webSocket.send(Buffer.concat([Buffer.from(header), chunk]));
+        header = null;
+      } else {
+        webSocket.send(chunk);
+      }
+    });
+    remoteSocket.on('close', () => { if (!hasData && retry) retry(); });
   }
 
   start(port = PORT) {
