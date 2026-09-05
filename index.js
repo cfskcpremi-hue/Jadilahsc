@@ -7,7 +7,6 @@ const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 const net = require('net');
 const dgram = require('dgram');
-const crypto = require('crypto');
 const url = require('url');
 
 const PORT = process.env.PORT || 3000;
@@ -148,7 +147,7 @@ class GatewayServer {
             <label class="text-xs text-slate-400 block mb-1">Pilih Path Proxy</label>
             <select id="path" class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-emerald-300 font-mono">
               <option value="id-akamai">🇮🇩 /id-akamai (172.232.249.224:2053)</option>
-              <option value="id-deneva">🇮🇩 /id-deneva (202.155.95.132:443)</option>
+              <option value="id-deneva" selected>🇮🇩 /id-deneva (202.155.95.132:443)</option>
               <option value="sg-ovh">🇸🇬 /sg-ovh (51.79.177.53:443)</option>
               <option value="sg-oracle">🇸🇬 /sg-oracle (138.2.64.229:443)</option>
             </select>
@@ -225,7 +224,8 @@ class GatewayServer {
   async handleWebSocketConnection(ws, request) {
     try {
       const urlObj = new URL(request.url, `http://${request.headers.host}`);
-      const rawPath = urlObj.pathname.replace(/^\/+/, ''); // bersihkan slash
+      // Ambil segmen pertama dari path (misal "id-deneva")
+      const rawPath = urlObj.pathname.split('/').filter(Boolean)[0] || "";
 
       const targetProxy = PROXY_MAP[rawPath];
       if (!targetProxy) {
