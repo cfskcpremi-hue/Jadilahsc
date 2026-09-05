@@ -1,11 +1,28 @@
+// ============================================
+// KANCIL VPN RAILWAY GATEWAY
+// Custom Path + Masa Aktif + Full UDP/DNS Intercept + Cyberpunk UI
+// ============================================
+
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 const net = require('net');
 const dgram = require('dgram');
+const crypto = require('crypto');
 const url = require('url');
 
 const PORT = process.env.PORT || 3000;
-const KV_PRX_URL = "https://raw.githubusercontent.com/backup-heavenly-demons/gateway/refs/heads/main/kvProxyList.json";
+const SYSTEM_UUID = process.env.SYSTEM_UUID || "c48619fe-8f02-49e0-b9e9-edf763e17e21";
+
+// Custom Target Mapping (Sesuai Permintaan)
+const PROXY_MAP = {
+  "id-akamai": "172.232.249.224:2053",
+  "id-deneva": "202.155.95.132:443",
+  "sg-ovh": "51.79.177.53:443",
+  "sg-oracle": "138.2.64.229:443"
+};
+
+// DNS Upstream Servers untuk UDP Fast Resolve
+const DNS_SERVERS = ["8.8.8.8", "1.1.1.1"];
 
 const horse = Buffer.from("dHJvamFu", 'base64').toString(); // trojan
 const flash = Buffer.from("dm1lc3M=", 'base64').toString(); // vmess
@@ -16,21 +33,16 @@ const CORS_HEADERS = {
   "Access-Control-Max-Age": "86400",
 };
 
+function generateHMAC(secret, message) {
+  const hmac = crypto.createHmac('sha256', secret);
+  hmac.update(message);
+  return hmac.digest('hex').substring(0, 16);
+}
+
 class GatewayServer {
   constructor() {
-    this.prxIP = "104.64.192.116:443";
     this.wss = null;
     this.activeUDPConnections = new Map();
-  }
-
-  async getKVPrxList() {
-    try {
-      const res = await fetch(KV_PRX_URL);
-      if (res.ok) return await res.json();
-      return {};
-    } catch (e) {
-      return {};
-    }
   }
 
   handleHttpRequest(req, res) {
@@ -103,8 +115,8 @@ class GatewayServer {
         <p class="text-lg font-bold text-purple-400">VLESS / TROJAN</p>
       </div>
       <div class="neon-card p-4 rounded-xl">
-        <p class="text-[10px] text-slate-500 font-bold mb-1">PORT TLS</p>
-        <p class="text-lg font-bold text-amber-400">443</p>
+        <p class="text-[10px] text-slate-500 font-bold mb-1">UDP & DNS</p>
+        <p class="text-lg font-bold text-amber-400">PASSED 🟢</p>
       </div>
     </div>
 
@@ -117,27 +129,39 @@ class GatewayServer {
       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div class="space-y-4">
           <div>
-            <label class="text-xs text-slate-400 block mb-1">UUID / Password</label>
-            <input id="uuid" type="text" value="c48619fe-8f02-49e0-b9e9-edf763e17e21" class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-emerald-300 font-mono">
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-xs text-slate-400">UUID / Password</label>
+              <button onclick="genUUID()" class="text-[10px] text-emerald-400 hover:text-emerald-300">
+                <i class="fa-solid fa-arrows-rotate"></i> ACAK UUID
+              </button>
+            </div>
+            <input id="uuid" type="text" value="${SYSTEM_UUID}" class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-emerald-300 font-mono">
           </div>
+
           <div>
-            <label class="text-xs text-slate-400 block mb-1">Host Domain</label>
-            <input id="host" type="text" value="${currentHost}" class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-white font-mono">
+            <label class="text-xs text-slate-400 block mb-1">Username / Remark</label>
+            <input id="remark" type="text" value="Kancil-VPN" class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-white font-mono">
           </div>
+
           <div>
-            <label class="text-xs text-slate-400 block mb-1">Pilih Target Path</label>
-            <select id="path" class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-emerald-300 font-mono">
-              <option value="/SG" selected>🇸🇬 /SG (Singapore)</option>
-              <option value="/ID">🇮🇩 /ID (Indonesia)</option>
-              <option value="/JP">🇯🇵 /JP (Japan)</option>
-              <option value="/US">🇺🇸 /US (United States)</option>
-              <option value="/ALL">🌍 /ALL (Global Rotate)</option>
+            <label class="text-xs text-slate-400 block mb-1">Masa Aktif</label>
+            <select id="expired" class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-emerald-300 font-mono">
+              <option value="30m">Trial (30 Menit)</option>
+              <option value="7d" selected>Weekly (7 Hari)</option>
+              <option value="30d">Monthly (30 Hari)</option>
             </select>
           </div>
+
           <div>
-            <label class="text-xs text-slate-400 block mb-1">SNI (Bug Host)</label>
-            <input id="sni" type="text" value="${currentHost}" class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-white font-mono">
+            <label class="text-xs text-slate-400 block mb-1">Pilih Target Path Proxy</label>
+            <select id="path" class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-emerald-300 font-mono">
+              <option value="id-akamai">🇮🇩 /id-akamai (172.232.249.224:2053)</option>
+              <option value="id-deneva">🇮🇩 /id-deneva (202.155.95.132:443)</option>
+              <option value="sg-ovh">🇸🇬 /sg-ovh (51.79.177.53:443)</option>
+              <option value="sg-oracle">🇸🇬 /sg-oracle (138.2.64.229:443)</option>
+            </select>
           </div>
+
           <button onclick="genAcc()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-black font-bold py-3 rounded-lg text-xs transition active:scale-95">
             GENERATE CONFIG LINKS
           </button>
@@ -146,17 +170,17 @@ class GatewayServer {
         <div class="space-y-4">
           <div>
             <div class="flex items-center justify-between mb-1">
-              <span class="text-[10px] text-purple-400 font-bold">VLESS WS TLS</span>
+              <span class="text-[10px] text-purple-400 font-bold">VLESS WS TLS (Port 443)</span>
               <button onclick="copyId('vless')" class="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded">COPY</button>
             </div>
-            <textarea id="vless" readonly class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-purple-300 font-mono h-24 resize-none"></textarea>
+            <textarea id="vless" readonly class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-purple-300 font-mono h-28 resize-none"></textarea>
           </div>
           <div>
             <div class="flex items-center justify-between mb-1">
-              <span class="text-[10px] text-amber-400 font-bold">TROJAN WS TLS</span>
+              <span class="text-[10px] text-amber-400 font-bold">TROJAN WS TLS (Port 443)</span>
               <button onclick="copyId('trojan')" class="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded">COPY</button>
             </div>
-            <textarea id="trojan" readonly class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-amber-300 font-mono h-24 resize-none"></textarea>
+            <textarea id="trojan" readonly class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-amber-300 font-mono h-28 resize-none"></textarea>
           </div>
         </div>
       </div>
@@ -164,15 +188,42 @@ class GatewayServer {
   </main>
 
   <script>
-    function genAcc() {
-      const u = document.getElementById('uuid').value.trim();
-      const h = document.getElementById('host').value.trim();
-      const p = document.getElementById('path').value.trim();
-      const s = document.getElementById('sni').value.trim();
-      const ep = encodeURIComponent(p);
+    const currentHost = location.host.split(':')[0];
+    const SYSTEM_KEY = "${SYSTEM_UUID}";
 
-      document.getElementById('vless').value = \`vless://\${u}@\${h}:443?encryption=none&security=tls&sni=\${s}&type=ws&host=\${h}&path=\${ep}#Kancil-VLESS-\${p.replace('/','')}\`;
-      document.getElementById('trojan').value = \`trojan://\${u}@\${h}:443?security=tls&sni=\${s}&type=ws&host=\${h}&path=\${ep}#Kancil-Trojan-\${p.replace('/','')}\`;
+    function genUUID() {
+      document.getElementById('uuid').value = crypto.randomUUID();
+      genAcc();
+    }
+
+    async function generateHMAC(secret, message) {
+      const enc = new TextEncoder();
+      const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+      const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+      return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 16);
+    }
+
+    async function genAcc() {
+      const u = document.getElementById('uuid').value.trim();
+      const p = document.getElementById('path').value.trim();
+      const r = document.getElementById('remark').value.trim() || 'Kancil-VPN';
+      const expType = document.getElementById('expired').value;
+
+      let durationSec = 7 * 86400;
+      if (expType === "30m") durationSec = 30 * 60;
+      else if (expType === "30d") durationSec = 30 * 86400;
+
+      const now = Math.floor(Date.now() / 1000);
+      const expTime = now + durationSec;
+      const expDate = new Date(expTime * 1000).toLocaleDateString('sv-SE', { timeZone: 'Asia/Jakarta' });
+
+      const sig = await generateHMAC(SYSTEM_KEY, \`\${p}:\${u}:\${expTime}\`);
+      const finalPath = \`/\${p}/\${expTime}/\${sig}/\${u}\`;
+      const ep = encodeURIComponent(finalPath);
+      const remarkTag = encodeURIComponent(\`\${r}[\${expDate}]-\${p}\`);
+
+      document.getElementById('vless').value = \`vless://\${u}@\${currentHost}:443?encryption=none&security=tls&sni=\${currentHost}&type=ws&host=\${currentHost}&path=\${ep}#\${remarkTag}\`;
+      document.getElementById('trojan').value = \`trojan://\${u}@\${currentHost}:443?security=tls&sni=\${currentHost}&type=ws&host=\${currentHost}&path=\${ep}#\${remarkTag}\`;
     }
 
     function copyId(id) {
@@ -195,26 +246,46 @@ class GatewayServer {
 
   async handleWebSocketConnection(ws, request) {
     try {
-      const parsedUrl = url.parse(request.url, true);
-      const countryKey = parsedUrl.pathname.replace("/", "").toUpperCase() || "SG";
+      const urlObj = new URL(request.url, `http://${request.headers.host}`);
+      const segments = urlObj.pathname.split('/').filter(Boolean);
 
-      const kvPrx = await this.getKVPrxList();
-      if (kvPrx[countryKey] && kvPrx[countryKey].length > 0) {
-        this.prxIP = kvPrx[countryKey][Math.floor(Math.random() * kvPrx[countryKey].length)];
-      } else {
-        const allProxies = Object.values(kvPrx).flat();
-        if (allProxies.length > 0) {
-          this.prxIP = allProxies[Math.floor(Math.random() * allProxies.length)];
-        }
+      let rawPath = segments[0] || "";
+      let exp = parseInt(segments[1] || "0", 10);
+      let sig = segments[segments.length - 2] || "";
+      let clientUid = segments[segments.length - 1] || "";
+
+      if (!exp) exp = parseInt(urlObj.searchParams.get("exp") || "0", 10);
+      if (!sig) sig = urlObj.searchParams.get("sig") || "";
+      if (!clientUid) clientUid = urlObj.searchParams.get("uid") || "";
+
+      const now = Math.floor(Date.now() / 1000);
+
+      // Verifikasi Masa Aktif
+      if (!exp || !sig || now > exp) {
+        if (ws.readyState === WebSocket.OPEN) ws.close(1008, 'Account Expired');
+        return;
       }
 
-      await this.websocketHandler(ws);
+      // Verifikasi Signature Token
+      const expectedSig = generateHMAC(SYSTEM_UUID, `${rawPath}:${clientUid}:${exp}`);
+      if (sig !== expectedSig) {
+        if (ws.readyState === WebSocket.OPEN) ws.close(1008, 'Invalid Token');
+        return;
+      }
+
+      const targetProxy = PROXY_MAP[rawPath];
+      if (!targetProxy) {
+        if (ws.readyState === WebSocket.OPEN) ws.close(1000, 'Unknown Path');
+        return;
+      }
+
+      await this.websocketHandler(ws, targetProxy);
     } catch (err) {
       if (ws.readyState === WebSocket.OPEN) ws.close(1011, 'Internal Error');
     }
   }
 
-  async websocketHandler(ws) {
+  async websocketHandler(ws, targetProxy) {
     let remoteSocketWrapper = { value: null };
 
     ws.on('message', async (message) => {
@@ -234,11 +305,12 @@ class GatewayServer {
 
         if (header.hasError) throw new Error(header.message);
 
+        // Pengolahan Jalur UDP (STUN / Twilio / DNS)
         if (header.isUDP) {
           return await this.handleUDPOutbound(header.addressRemote, header.portRemote, chunk.slice(header.rawDataIndex), ws, header.version);
         }
 
-        this.handleTCPOutBound(remoteSocketWrapper, header.addressRemote, header.portRemote, header.rawClientData, ws, header.version);
+        this.handleTCPOutBound(remoteSocketWrapper, targetProxy, header.rawClientData, ws);
       } catch (err) {
         if (ws.readyState === WebSocket.OPEN) ws.close(1011, err.message);
       }
@@ -262,47 +334,42 @@ class GatewayServer {
     return "ss";
   }
 
-  async handleTCPOutBound(remoteSocket, addressRemote, portRemote, rawClientData, webSocket, responseHeader) {
-    const connectAndWrite = (address, port) => new Promise((resolve, reject) => {
-      const s = net.createConnection({ host: address, port }, () => {
-        s.write(rawClientData);
-        resolve(s);
-      });
-      s.on('error', reject);
-    });
-
-    const retry = async () => {
-      try {
-        const parts = this.prxIP.split(":");
-        const s = await connectAndWrite(parts[0], parseInt(parts[1], 10) || 443);
-        remoteSocket.value = s;
-        s.on('close', () => { if (webSocket.readyState === WebSocket.OPEN) webSocket.close(); });
-        s.on('error', () => { if (webSocket.readyState === WebSocket.OPEN) webSocket.close(); });
-        this.remoteSocketToWS(s, webSocket, responseHeader, null);
-      } catch (e) {
-        if (webSocket.readyState === WebSocket.OPEN) webSocket.close();
-      }
-    };
+  async handleTCPOutBound(remoteSocket, targetProxy, rawClientData, webSocket) {
+    const [targetHost, targetPortStr] = targetProxy.split(":");
+    const targetPort = parseInt(targetPortStr, 10);
 
     try {
-      const s = await connectAndWrite(addressRemote, portRemote);
+      const s = net.createConnection({ host: targetHost, port: targetPort }, () => {
+        s.write(rawClientData);
+      });
+
       remoteSocket.value = s;
+
+      s.on('data', (data) => {
+        if (webSocket.readyState === WebSocket.OPEN) webSocket.send(data);
+      });
+
       s.on('close', () => { if (webSocket.readyState === WebSocket.OPEN) webSocket.close(); });
       s.on('error', () => { if (webSocket.readyState === WebSocket.OPEN) webSocket.close(); });
-      this.remoteSocketToWS(s, webSocket, responseHeader, retry);
     } catch (e) {
-      await retry();
+      if (webSocket.readyState === WebSocket.OPEN) webSocket.close();
     }
   }
 
   async handleUDPOutbound(targetAddress, targetPort, dataChunk, webSocket, responseHeader) {
     try {
       let header = responseHeader;
-      const key = `${targetAddress}:${targetPort}:${Date.now()}`;
+      // Pengalihan DNS Port 53 ke Public DNS jika diperlukan
+      let destAddress = targetAddress;
+      if (targetPort === 53) {
+        destAddress = DNS_SERVERS[Math.floor(Math.random() * DNS_SERVERS.length)];
+      }
+
+      const key = `${destAddress}:${targetPort}:${Date.now()}`;
       const sock = dgram.createSocket('udp4');
       this.activeUDPConnections.set(key, { socket: sock, webSocket });
 
-      sock.send(dataChunk, targetPort, targetAddress, (e) => {
+      sock.send(dataChunk, targetPort, destAddress, (e) => {
         if (e) { try { sock.close(); } catch (_) {} this.activeUDPConnections.delete(key); }
       });
 
@@ -316,6 +383,12 @@ class GatewayServer {
           }
         }
       });
+
+      // Timeout hemat memori agar hemat resource Railway
+      setTimeout(() => {
+        try { sock.close(); } catch (_) {}
+        this.activeUDPConnections.delete(key);
+      }, 15000);
     } catch (e) {}
   }
 
@@ -336,7 +409,7 @@ class GatewayServer {
     else return { hasError: true, message: `Invalid addr type: ${at}` };
     const pi = avi + al;
     const pr = buf.readUInt16BE(pi);
-    return { hasError: false, addressRemote: av, portRemote: pr, rawDataIndex: pi+2, rawClientData: buf.slice(pi+2), version: null, isUDP: pr === 53 };
+    return { hasError: false, addressRemote: av, portRemote: pr, rawDataIndex: pi+2, rawClientData: buf.slice(pi+2), version: null, isUDP: pr === 53 || pr > 1024 };
   }
 
   readFlashHeader(buf) {
@@ -364,27 +437,12 @@ class GatewayServer {
     return { hasError: false, addressRemote: av, portRemote: pr, rawDataIndex: pi+4, rawClientData: db.slice(pi+4), version: null, isUDP: udp };
   }
 
-  remoteSocketToWS(remoteSocket, webSocket, responseHeader, retry) {
-    let header = responseHeader, hasData = false;
-    remoteSocket.on('data', (chunk) => {
-      hasData = true;
-      if (webSocket.readyState !== WebSocket.OPEN) { remoteSocket.destroy(); return; }
-      if (header) {
-        webSocket.send(Buffer.concat([Buffer.from(header), chunk]));
-        header = null;
-      } else {
-        webSocket.send(chunk);
-      }
-    });
-    remoteSocket.on('close', () => { if (!hasData && retry) retry(); });
-  }
-
   start(port = PORT) {
     const server = http.createServer((req, res) => {
       this.handleHttpRequest(req, res);
     });
 
-    this.wss = new WebSocket.Server({ server, perMessageDeflate: false });
+    this.wss = new WebSocketServer({ server, perMessageDeflate: false });
     this.wss.on('connection', (ws, req) => {
       this.handleWebSocketConnection(ws, req);
     });
