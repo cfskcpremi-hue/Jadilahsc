@@ -1,14 +1,7 @@
-// ============================================
-// KANCIL VPN RAILWAY GATEWAY
-// Full Protocol Sniffer (VLESS/Trojan/VMess/SS) + Cyberpunk Dashboard
-// ============================================
-
-const WebSocket = require('ws');
+const http = require('http');
+const { WebSocketServer, WebSocket } = require('ws');
 const net = require('net');
 const dgram = require('dgram');
-const fetch = require('node-fetch');
-const http = require('http');
-const https = require('https');
 const url = require('url');
 
 const PORT = process.env.PORT || 3000;
@@ -25,25 +18,22 @@ const CORS_HEADERS = {
 
 class GatewayServer {
   constructor() {
-    this.prxIP = "";
+    this.prxIP = "104.64.192.116:443";
     this.wss = null;
-    this.httpServer = null;
     this.activeUDPConnections = new Map();
-    this.totalRX = 0;
-    this.totalTX = 0;
   }
 
   async getKVPrxList() {
     try {
       const res = await fetch(KV_PRX_URL);
-      if (res.status === 200) return await res.json();
+      if (res.ok) return await res.json();
       return {};
     } catch (e) {
       return {};
     }
   }
 
-  async handleHttpRequest(req, res) {
+  handleHttpRequest(req, res) {
     const parsedUrl = url.parse(req.url, true);
 
     if (req.method === 'OPTIONS') {
@@ -54,17 +44,16 @@ class GatewayServer {
 
     if (parsedUrl.pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json', ...CORS_HEADERS });
-      res.end(JSON.stringify({ status: 'healthy', uptime: process.uptime() }));
+      res.end(JSON.stringify({ status: 'healthy', uptime: Math.floor(process.uptime()) }));
       return;
     }
 
-    if (parsedUrl.pathname === '/') {
+    if (parsedUrl.pathname === '/' || parsedUrl.pathname === '/dashboard') {
       const currentHost = req.headers.host || 'localhost:3000';
-      const protocolWs = req.headers['x-forwarded-proto'] === 'https' ? 'wss' : 'ws';
       const uptime = Math.floor(process.uptime());
       const ramUsed = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
 
-      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(`<!DOCTYPE html>
 <html lang="id">
 <head>
@@ -78,12 +67,9 @@ class GatewayServer {
     body { font-family: 'JetBrains Mono', monospace; background-color: #07080e; color: #cbd5e1; }
     .glow-box { box-shadow: 0 0 20px rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); }
     .neon-card { background: #0d0f1a; border: 1px solid #1e293b; }
-    .neon-card:hover { border-color: #10b981; }
   </style>
 </head>
 <body class="min-h-screen pb-12">
-
-  <!-- HEADER -->
   <header class="border-b border-slate-800 bg-[#0a0c16]/90 backdrop-blur sticky top-0 z-50 px-6 py-4">
     <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
       <div class="flex items-center gap-3">
@@ -92,19 +78,17 @@ class GatewayServer {
         </div>
         <div>
           <h1 class="text-lg font-bold tracking-wider text-white">KANCIL_VPN<span class="text-emerald-400">.sys</span></h1>
-          <p class="text-[10px] text-slate-500">RAILWAY HIGH-SPEED RELAY NODE</p>
+          <p class="text-[10px] text-slate-500">RAILWAY HIGH-SPEED GATEWAY</p>
         </div>
       </div>
       <div class="flex items-center gap-2 bg-emerald-950/60 border border-emerald-800 px-4 py-1.5 rounded-lg">
         <span class="h-2 w-2 rounded-full bg-emerald-400 animate-ping"></span>
-        <span class="text-xs font-semibold text-emerald-300">SERVER ONLINE</span>
+        <span class="text-xs font-semibold text-emerald-300">SERVER ACTIVE</span>
       </div>
     </div>
   </header>
 
   <main class="max-w-6xl mx-auto px-6 pt-8 space-y-6">
-
-    <!-- STATS -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
       <div class="neon-card p-4 rounded-xl">
         <p class="text-[10px] text-slate-500 font-bold mb-1">UPTIME</p>
@@ -115,7 +99,7 @@ class GatewayServer {
         <p class="text-lg font-bold text-emerald-400">${ramUsed} MB</p>
       </div>
       <div class="neon-card p-4 rounded-xl">
-        <p class="text-[10px] text-slate-500 font-bold mb-1">PROTOCOL</p>
+        <p class="text-[10px] text-slate-500 font-bold mb-1">PROTOKOL</p>
         <p class="text-lg font-bold text-purple-400">VLESS / TROJAN</p>
       </div>
       <div class="neon-card p-4 rounded-xl">
@@ -124,7 +108,6 @@ class GatewayServer {
       </div>
     </div>
 
-    <!-- GENERATOR PANEL -->
     <div class="glow-box bg-[#0c0e18] rounded-2xl p-6">
       <div class="flex items-center gap-2 border-b border-slate-800 pb-3 mb-6">
         <i class="fa-solid fa-sliders text-emerald-400"></i>
@@ -142,17 +125,17 @@ class GatewayServer {
             <input id="host" type="text" value="${currentHost}" class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-white font-mono">
           </div>
           <div>
-            <label class="text-xs text-slate-400 block mb-1">Pilih Server Target / Path</label>
+            <label class="text-xs text-slate-400 block mb-1">Pilih Target Path</label>
             <select id="path" class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-emerald-300 font-mono">
-              <option value="/ID">🇮🇩 /ID (Indonesia)</option>
               <option value="/SG" selected>🇸🇬 /SG (Singapore)</option>
+              <option value="/ID">🇮🇩 /ID (Indonesia)</option>
               <option value="/JP">🇯🇵 /JP (Japan)</option>
               <option value="/US">🇺🇸 /US (United States)</option>
-              <option value="/ALL">🌍 /ALL (Rotate Global)</option>
+              <option value="/ALL">🌍 /ALL (Global Rotate)</option>
             </select>
           </div>
           <div>
-            <label class="text-xs text-slate-400 block mb-1">SNI (Server Name Indication)</label>
+            <label class="text-xs text-slate-400 block mb-1">SNI (Bug Host)</label>
             <input id="sni" type="text" value="${currentHost}" class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-white font-mono">
           </div>
           <button onclick="genAcc()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-black font-bold py-3 rounded-lg text-xs transition active:scale-95">
@@ -178,7 +161,6 @@ class GatewayServer {
         </div>
       </div>
     </div>
-
   </main>
 
   <script>
@@ -187,21 +169,17 @@ class GatewayServer {
       const h = document.getElementById('host').value.trim();
       const p = document.getElementById('path').value.trim();
       const s = document.getElementById('sni').value.trim();
-      
       const ep = encodeURIComponent(p);
 
-      const v = \`vless://\${u}@\${h}:443?encryption=none&security=tls&sni=\${s}&type=ws&host=\${h}&path=\${ep}#Kancil-VLESS-\${p.replace('/','')}\`;
-      const t = \`trojan://\${u}@\${h}:443?security=tls&sni=\${s}&type=ws&host=\${h}&path=\${ep}#Kancil-Trojan-\${p.replace('/','')}\`;
-
-      document.getElementById('vless').value = v;
-      document.getElementById('trojan').value = t;
+      document.getElementById('vless').value = \`vless://\${u}@\${h}:443?encryption=none&security=tls&sni=\${s}&type=ws&host=\${h}&path=\${ep}#Kancil-VLESS-\${p.replace('/','')}\`;
+      document.getElementById('trojan').value = \`trojan://\${u}@\${h}:443?security=tls&sni=\${s}&type=ws&host=\${h}&path=\${ep}#Kancil-Trojan-\${p.replace('/','')}\`;
     }
 
     function copyId(id) {
       const el = document.getElementById(id);
       el.select();
       navigator.clipboard.writeText(el.value);
-      alert('Config disalin!');
+      alert('Config berhasil disalin!');
     }
 
     window.onload = genAcc;
@@ -211,32 +189,28 @@ class GatewayServer {
       return;
     }
 
-    res.writeHead(404);
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('Not Found');
   }
 
   async handleWebSocketConnection(ws, request) {
     try {
       const parsedUrl = url.parse(request.url, true);
-      const path = parsedUrl.pathname.toUpperCase();
+      const countryKey = parsedUrl.pathname.replace("/", "").toUpperCase() || "SG";
 
       const kvPrx = await this.getKVPrxList();
-      const countryKey = path.replace("/", "") || "SG";
-
       if (kvPrx[countryKey] && kvPrx[countryKey].length > 0) {
         this.prxIP = kvPrx[countryKey][Math.floor(Math.random() * kvPrx[countryKey].length)];
       } else {
         const allProxies = Object.values(kvPrx).flat();
         if (allProxies.length > 0) {
           this.prxIP = allProxies[Math.floor(Math.random() * allProxies.length)];
-        } else {
-          this.prxIP = "104.64.192.116:443"; // Fallback IP
         }
       }
 
       await this.websocketHandler(ws);
     } catch (err) {
-      ws.close(1011, 'Internal Error');
+      if (ws.readyState === WebSocket.OPEN) ws.close(1011, 'Internal Error');
     }
   }
 
@@ -247,7 +221,7 @@ class GatewayServer {
       try {
         const chunk = Buffer.from(message);
         if (remoteSocketWrapper.value) {
-          remoteSocketWrapper.value.write(chunk);
+          if (remoteSocketWrapper.value.writable) remoteSocketWrapper.value.write(chunk);
           return;
         }
 
@@ -266,7 +240,7 @@ class GatewayServer {
 
         this.handleTCPOutBound(remoteSocketWrapper, header.addressRemote, header.portRemote, header.rawClientData, ws, header.version);
       } catch (err) {
-        ws.close(1011, err.message);
+        if (ws.readyState === WebSocket.OPEN) ws.close(1011, err.message);
       }
     });
 
@@ -302,19 +276,19 @@ class GatewayServer {
         const parts = this.prxIP.split(":");
         const s = await connectAndWrite(parts[0], parseInt(parts[1], 10) || 443);
         remoteSocket.value = s;
-        s.on('close', () => webSocket.close());
-        s.on('error', () => webSocket.close());
+        s.on('close', () => { if (webSocket.readyState === WebSocket.OPEN) webSocket.close(); });
+        s.on('error', () => { if (webSocket.readyState === WebSocket.OPEN) webSocket.close(); });
         this.remoteSocketToWS(s, webSocket, responseHeader, null);
       } catch (e) {
-        webSocket.close();
+        if (webSocket.readyState === WebSocket.OPEN) webSocket.close();
       }
     };
 
     try {
       const s = await connectAndWrite(addressRemote, portRemote);
       remoteSocket.value = s;
-      s.on('close', () => webSocket.close());
-      s.on('error', () => webSocket.close());
+      s.on('close', () => { if (webSocket.readyState === WebSocket.OPEN) webSocket.close(); });
+      s.on('error', () => { if (webSocket.readyState === WebSocket.OPEN) webSocket.close(); });
       this.remoteSocketToWS(s, webSocket, responseHeader, retry);
     } catch (e) {
       await retry();
