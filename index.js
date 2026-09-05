@@ -1,6 +1,6 @@
 // ============================================
 // KANCIL VPN RAILWAY GATEWAY
-// Custom Path + Masa Aktif + Full UDP/DNS Intercept + Cyberpunk UI
+// Clean Short Path + Cyberpunk Dashboard + Full UDP
 // ============================================
 
 const http = require('http');
@@ -13,7 +13,7 @@ const url = require('url');
 const PORT = process.env.PORT || 3000;
 const SYSTEM_UUID = process.env.SYSTEM_UUID || "c48619fe-8f02-49e0-b9e9-edf763e17e21";
 
-// Custom Target Mapping (Sesuai Permintaan)
+// Mapping Path Spesifik
 const PROXY_MAP = {
   "id-akamai": "172.232.249.224:2053",
   "id-deneva": "202.155.95.132:443",
@@ -21,9 +21,7 @@ const PROXY_MAP = {
   "sg-oracle": "138.2.64.229:443"
 };
 
-// DNS Upstream Servers untuk UDP Fast Resolve
 const DNS_SERVERS = ["8.8.8.8", "1.1.1.1"];
-
 const horse = Buffer.from("dHJvamFu", 'base64').toString(); // trojan
 const flash = Buffer.from("dm1lc3M=", 'base64').toString(); // vmess
 
@@ -32,12 +30,6 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "GET,HEAD,POST,OPTIONS",
   "Access-Control-Max-Age": "86400",
 };
-
-function generateHMAC(secret, message) {
-  const hmac = crypto.createHmac('sha256', secret);
-  hmac.update(message);
-  return hmac.digest('hex').substring(0, 16);
-}
 
 class GatewayServer {
   constructor() {
@@ -153,7 +145,7 @@ class GatewayServer {
           </div>
 
           <div>
-            <label class="text-xs text-slate-400 block mb-1">Pilih Target Path Proxy</label>
+            <label class="text-xs text-slate-400 block mb-1">Pilih Path Proxy</label>
             <select id="path" class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-emerald-300 font-mono">
               <option value="id-akamai">🇮🇩 /id-akamai (172.232.249.224:2053)</option>
               <option value="id-deneva">🇮🇩 /id-deneva (202.155.95.132:443)</option>
@@ -170,14 +162,14 @@ class GatewayServer {
         <div class="space-y-4">
           <div>
             <div class="flex items-center justify-between mb-1">
-              <span class="text-[10px] text-purple-400 font-bold">VLESS WS TLS (Port 443)</span>
+              <span class="text-[10px] text-purple-400 font-bold">VLESS WS TLS</span>
               <button onclick="copyId('vless')" class="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded">COPY</button>
             </div>
             <textarea id="vless" readonly class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-purple-300 font-mono h-28 resize-none"></textarea>
           </div>
           <div>
             <div class="flex items-center justify-between mb-1">
-              <span class="text-[10px] text-amber-400 font-bold">TROJAN WS TLS (Port 443)</span>
+              <span class="text-[10px] text-amber-400 font-bold">TROJAN WS TLS</span>
               <button onclick="copyId('trojan')" class="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded">COPY</button>
             </div>
             <textarea id="trojan" readonly class="w-full bg-[#06070c] border border-slate-800 rounded-lg p-2.5 text-xs text-amber-300 font-mono h-28 resize-none"></textarea>
@@ -189,41 +181,27 @@ class GatewayServer {
 
   <script>
     const currentHost = location.host.split(':')[0];
-    const SYSTEM_KEY = "${SYSTEM_UUID}";
 
     function genUUID() {
       document.getElementById('uuid').value = crypto.randomUUID();
       genAcc();
     }
 
-    async function generateHMAC(secret, message) {
-      const enc = new TextEncoder();
-      const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-      const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message));
-      return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 16);
-    }
-
-    async function genAcc() {
+    function genAcc() {
       const u = document.getElementById('uuid').value.trim();
       const p = document.getElementById('path').value.trim();
       const r = document.getElementById('remark').value.trim() || 'Kancil-VPN';
       const expType = document.getElementById('expired').value;
 
-      let durationSec = 7 * 86400;
-      if (expType === "30m") durationSec = 30 * 60;
-      else if (expType === "30d") durationSec = 30 * 86400;
+      let labelExp = "7D";
+      if (expType === "30m") labelExp = "30M";
+      else if (expType === "30d") labelExp = "30D";
 
-      const now = Math.floor(Date.now() / 1000);
-      const expTime = now + durationSec;
-      const expDate = new Date(expTime * 1000).toLocaleDateString('sv-SE', { timeZone: 'Asia/Jakarta' });
+      const cleanPath = "/" + p;
+      const remarkTag = encodeURIComponent(\`\${r}[\${labelExp}]-\${p}\`);
 
-      const sig = await generateHMAC(SYSTEM_KEY, \`\${p}:\${u}:\${expTime}\`);
-      const finalPath = \`/\${p}/\${expTime}/\${sig}/\${u}\`;
-      const ep = encodeURIComponent(finalPath);
-      const remarkTag = encodeURIComponent(\`\${r}[\${expDate}]-\${p}\`);
-
-      document.getElementById('vless').value = \`vless://\${u}@\${currentHost}:443?encryption=none&security=tls&sni=\${currentHost}&type=ws&host=\${currentHost}&path=\${ep}#\${remarkTag}\`;
-      document.getElementById('trojan').value = \`trojan://\${u}@\${currentHost}:443?security=tls&sni=\${currentHost}&type=ws&host=\${currentHost}&path=\${ep}#\${remarkTag}\`;
+      document.getElementById('vless').value = \`vless://\${u}@\${currentHost}:443?encryption=none&security=tls&sni=\${currentHost}&type=ws&host=\${currentHost}&path=\${encodeURIComponent(cleanPath)}#\${remarkTag}\`;
+      document.getElementById('trojan').value = \`trojan://\${u}@\${currentHost}:443?security=tls&sni=\${currentHost}&type=ws&host=\${currentHost}&path=\${encodeURIComponent(cleanPath)}#\${remarkTag}\`;
     }
 
     function copyId(id) {
@@ -247,31 +225,7 @@ class GatewayServer {
   async handleWebSocketConnection(ws, request) {
     try {
       const urlObj = new URL(request.url, `http://${request.headers.host}`);
-      const segments = urlObj.pathname.split('/').filter(Boolean);
-
-      let rawPath = segments[0] || "";
-      let exp = parseInt(segments[1] || "0", 10);
-      let sig = segments[segments.length - 2] || "";
-      let clientUid = segments[segments.length - 1] || "";
-
-      if (!exp) exp = parseInt(urlObj.searchParams.get("exp") || "0", 10);
-      if (!sig) sig = urlObj.searchParams.get("sig") || "";
-      if (!clientUid) clientUid = urlObj.searchParams.get("uid") || "";
-
-      const now = Math.floor(Date.now() / 1000);
-
-      // Verifikasi Masa Aktif
-      if (!exp || !sig || now > exp) {
-        if (ws.readyState === WebSocket.OPEN) ws.close(1008, 'Account Expired');
-        return;
-      }
-
-      // Verifikasi Signature Token
-      const expectedSig = generateHMAC(SYSTEM_UUID, `${rawPath}:${clientUid}:${exp}`);
-      if (sig !== expectedSig) {
-        if (ws.readyState === WebSocket.OPEN) ws.close(1008, 'Invalid Token');
-        return;
-      }
+      const rawPath = urlObj.pathname.replace(/^\/+/, ''); // bersihkan slash
 
       const targetProxy = PROXY_MAP[rawPath];
       if (!targetProxy) {
@@ -305,7 +259,6 @@ class GatewayServer {
 
         if (header.hasError) throw new Error(header.message);
 
-        // Pengolahan Jalur UDP (STUN / Twilio / DNS)
         if (header.isUDP) {
           return await this.handleUDPOutbound(header.addressRemote, header.portRemote, chunk.slice(header.rawDataIndex), ws, header.version);
         }
@@ -359,7 +312,6 @@ class GatewayServer {
   async handleUDPOutbound(targetAddress, targetPort, dataChunk, webSocket, responseHeader) {
     try {
       let header = responseHeader;
-      // Pengalihan DNS Port 53 ke Public DNS jika diperlukan
       let destAddress = targetAddress;
       if (targetPort === 53) {
         destAddress = DNS_SERVERS[Math.floor(Math.random() * DNS_SERVERS.length)];
@@ -384,7 +336,6 @@ class GatewayServer {
         }
       });
 
-      // Timeout hemat memori agar hemat resource Railway
       setTimeout(() => {
         try { sock.close(); } catch (_) {}
         this.activeUDPConnections.delete(key);
