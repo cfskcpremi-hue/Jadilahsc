@@ -2,44 +2,32 @@ const express = require('express');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const net = require('net');
-const tls = require('tls');
 const crypto = require('crypto');
 
 const PORT = process.env.PORT || 3000;
 const SYSTEM_UUID = process.env.SYSTEM_UUID || "c48619fe-8f02-49e0-b9e9-edf763e17e21";
+
+// Mapping IP Server Target
+const PROXY_MAP = {
+    "trojanws-deneva": "202.155.95.132:443",
+    "vlessws-deneva": "202.155.95.132:443",
+    "trojanws-akamai": "172.232.249.224:2053",
+    "vlessws-akamai": "172.232.249.224:2053",
+    "trojanws-pusat": "103.6.207.108:8080",
+    "vlessws-pusat": "103.6.207.108:8080",
+    "trojanws-sgakamai": "104.64.192.116:443",
+    "vlessws-sgakamai": "104.64.192.116:443",
+    "trojanws-amazon": "13.250.19.142:443",
+    "vlessws-amazon": "13.250.19.142:443",
+    "trojanws-contabo": "194.233.85.147:443",
+    "vlessws-contabo": "194.233.85.147:443"
+};
 
 function generateHMAC(secret, message) {
     const hmac = crypto.createHmac('sha256', secret);
     hmac.update(message);
     return hmac.digest('hex').substring(0, 16);
 }
-
-const PROXY_MAP = {
-    "trojanws-deneva": "202.155.95.132:443",
-    "vlessws-deneva": "202.155.95.132:443",
-    "vmessws-deneva": "202.155.95.132:443",
-    "trojanws-akamai": "172.232.249.224:2053",
-    "vlessws-akamai": "172.232.249.224:2053",
-    "vmessws-akamai": "172.232.249.224:2053",
-    "trojanws-pusat": "103.6.207.108:8080",
-    "vlessws-pusat": "103.6.207.108:8080",
-    "vmessws-pusat": "103.6.207.108:8080",
-    "trojanws-sgakamai": "104.64.192.116:443",
-    "vlessws-sgakamai": "104.64.192.116:443",
-    "vmessws-sgakamai": "104.64.192.116:443",
-    "trojanws-amazon": "13.250.19.142:443",
-    "vlessws-amazon": "13.250.19.142:443",
-    "vmessws-amazon": "13.250.19.142:443",
-    "trojanws-contabo": "194.233.85.147:443",
-    "vlessws-contabo": "194.233.85.147:443",
-    "vmessws-contabo": "194.233.85.147:443",
-    "trojanws-oracle": "138.2.64.229:443",
-    "vlessws-oracle": "138.2.64.229:443",
-    "vmessws-oracle": "138.2.64.229:443",
-    "trojanws-ovh": "51.79.177.53:443",
-    "vlessws-ovh": "51.79.177.53:443",
-    "vmessws-ovh": "51.79.177.53:443"
-};
 
 const app = express();
 const server = http.createServer(app);
@@ -51,44 +39,52 @@ function buildDashboardHTML(host, uuid) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kancil VPN Railway Server</title>
+    <title>Kancil VPN Railway</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>body { background-color: #060a0f; color: #e2e8f0; font-family: ui-sans-serif, system-ui; }</style>
+    <style>body { background-color: #060a0f; color: #e2e8f0; font-family: sans-serif; }</style>
 </head>
-<body class="min-h-screen p-8 max-w-2xl mx-auto">
+<body class="min-h-screen p-6 max-w-xl mx-auto">
     <div class="bg-slate-900 p-6 rounded-2xl border border-emerald-500/30">
-        <h1 class="text-xl font-bold text-emerald-400 mb-2">Kancil VPN Railway Dashboard</h1>
-        <p class="text-xs text-slate-400 mb-4">Host: ${host}</p>
-        
-        <div class="space-y-3">
+        <h1 class="text-xl font-bold text-emerald-400 mb-2">Kancil VPN Generator</h1>
+        <p class="text-xs text-slate-400 mb-4">Host Domain: ${host}</p>
+
+        <div class="space-y-4">
             <div>
-                <label class="text-xs text-emerald-400">Pilih Server Target</label>
-                <select id="proxySelect" class="w-full bg-slate-950 p-2 text-sm rounded border border-slate-800 text-slate-200 font-mono"></select>
-            </div>
-            <div>
-                <label class="text-xs text-emerald-400">Protokol</label>
-                <select id="protoSelect" class="w-full bg-slate-950 p-2 text-sm rounded border border-slate-800 text-slate-200 font-mono">
-                    <option value="vless">VLESS WS TLS (Port 443)</option>
-                    <option value="trojan">Trojan WS TLS (Port 443)</option>
+                <label class="text-xs text-emerald-400 font-bold block mb-1">Pilih Protokol</label>
+                <select id="protocolSelect" onchange="updateProxyOptions()" class="w-full bg-slate-950 p-2 text-sm rounded border border-slate-800 text-slate-200">
+                    <option value="vlessws" selected>VLESS WS TLS (Port 443)</option>
+                    <option value="trojanws">Trojan WS TLS (Port 443)</option>
                 </select>
             </div>
-            <button onclick="gen()" class="w-full bg-emerald-600 text-slate-950 font-bold p-2.5 rounded text-sm mt-4">Generate Link</button>
+            <div>
+                <label class="text-xs text-emerald-400 font-bold block mb-1">Pilih Server Target</label>
+                <select id="proxySelect" class="w-full bg-slate-950 p-2 text-sm rounded border border-slate-800 text-slate-200 font-mono"></select>
+            </div>
+            <button onclick="generateLinks()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold py-2 rounded text-sm">
+                Generate Link
+            </button>
         </div>
 
         <div id="out" class="mt-4 hidden">
-            <textarea id="link" readonly class="w-full bg-slate-950 p-2 text-xs font-mono text-emerald-300 h-24 rounded border border-slate-800"></textarea>
+            <textarea id="generatedLink" readonly class="w-full bg-slate-950 p-3 text-xs font-mono text-emerald-300 h-28 rounded border border-slate-800 resize-none"></textarea>
+            <button onclick="copyLink()" class="w-full bg-slate-800 text-emerald-400 py-1.5 rounded text-xs mt-2 border border-slate-700">Salin Link</button>
         </div>
     </div>
 
     <script>
-        const host = location.host.split(':')[0];
-        const proxyData = ${JSON.stringify(Object.keys(PROXY_MAP))};
-        const select = document.getElementById("proxySelect");
-        proxyData.forEach(p => {
-            const opt = document.createElement("option");
-            opt.value = p; opt.textContent = p;
-            select.appendChild(opt);
-        });
+        const currentHost = location.host.split(':')[0];
+        const proxyKeys = ${JSON.stringify(Object.keys(PROXY_MAP))};
+
+        function updateProxyOptions() {
+            const proto = document.getElementById("protocolSelect").value;
+            const select = document.getElementById("proxySelect");
+            select.innerHTML = "";
+            proxyKeys.filter(k => k.startsWith(proto)).forEach(k => {
+                const opt = document.createElement("option");
+                opt.value = k; opt.textContent = k;
+                select.appendChild(opt);
+            });
+        }
 
         async function generateHMAC(secret, message) {
             const enc = new TextEncoder();
@@ -97,23 +93,32 @@ function buildDashboardHTML(host, uuid) {
             return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 16);
         }
 
-        async function gen() {
-            const p = select.value;
-            const proto = document.getElementById("protoSelect").value;
+        async function generateLinks() {
+            const proto = document.getElementById("protocolSelect").value;
+            const pathVal = document.getElementById("proxySelect").value;
             const uuid = "${uuid}";
-            const exp = Math.floor(Date.now()/1000) + 604800;
-            const sig = await generateHMAC(uuid, \`\${p}:\${uuid}:\${exp}\`);
-            const path = encodeURIComponent(\`/\${p}/\${exp}/\${sig}/\${uuid}\`);
-            
+            const exp = Math.floor(Date.now() / 1000) + (7 * 86400);
+            const sig = await generateHMAC(uuid, \`\${pathVal}:\${uuid}:\${exp}\`);
+            const finalPath = \`/\${pathVal}/\${exp}/\${sig}/\${uuid}\`;
+
             let res = "";
-            if (proto === "vless") {
-                res = \`vless://\${uuid}@\${host}:443?encryption=none&security=tls&sni=\${host}&type=ws&host=\${host}&path=\${path}#Kancil-\${p}\`;
+            if (proto === "vlessws") {
+                res = \`vless://\${uuid}@\${currentHost}:443?encryption=none&security=tls&sni=\${currentHost}&type=ws&host=\${currentHost}&path=\${encodeURIComponent(finalPath)}#Kancil-\${pathVal}\`;
             } else {
-                res = \`trojan://\${uuid}@\${host}:443?path=\${path}&security=tls&host=\${host}&type=ws&sni=\${host}#Kancil-\${p}\`;
+                res = \`trojan://\${uuid}@\${currentHost}:443?path=\${encodeURIComponent(finalPath)}&security=tls&host=\${currentHost}&type=ws&sni=\${currentHost}#Kancil-\${pathVal}\`;
             }
-            document.getElementById("link").value = res;
+            document.getElementById("generatedLink").value = res;
             document.getElementById("out").classList.remove("hidden");
         }
+
+        function copyLink() {
+            const input = document.getElementById("generatedLink");
+            input.select();
+            navigator.clipboard.writeText(input.value);
+            alert("Berhasil disalin!");
+        }
+
+        window.onload = updateProxyOptions;
     </script>
 </body>
 </html>`;
@@ -129,7 +134,7 @@ server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
     const segments = url.pathname.split('/').filter(Boolean);
 
-    const rawPath = segments[0] || "";
+    let rawPath = segments[0] || "";
     let exp = parseInt(segments[1] || "0", 10);
     let sig = segments[2] || "";
     let clientUid = segments[3] || "";
@@ -141,14 +146,14 @@ server.on('upgrade', (request, socket, head) => {
     const now = Math.floor(Date.now() / 1000);
 
     if (!exp || !sig || now > exp) {
-        socket.write('HTTP/1.1 403 Forbidden\r\n\r\nExpired');
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\nExpired Account');
         socket.destroy();
         return;
     }
 
     const expectedSig = generateHMAC(SYSTEM_UUID, `${rawPath}:${clientUid}:${exp}`);
     if (sig !== expectedSig) {
-        socket.write('HTTP/1.1 403 Forbidden\r\n\r\nInvalid Token');
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\nInvalid Signature');
         socket.destroy();
         return;
     }
@@ -157,6 +162,24 @@ server.on('upgrade', (request, socket, head) => {
         wss.emit('connection', ws, request, rawPath);
     });
 });
+
+// Parser Header VLESS & Trojan agar tidak error di Railway
+function parseV2RayHeader(buffer) {
+    if (buffer.length < 2) return buffer;
+    
+    // Trojan Parser
+    if (buffer.length >= 58 && buffer[56] === 0x0d && buffer[57] === 0x0a) {
+        return buffer.slice(58);
+    }
+
+    // VLESS Parser
+    if (buffer[0] === 0) {
+        const optLength = buffer[17];
+        return buffer.slice(19 + optLength);
+    }
+
+    return buffer;
+}
 
 wss.on('connection', (ws, req, rawPath) => {
     const targetProxy = PROXY_MAP[rawPath];
@@ -168,34 +191,52 @@ wss.on('connection', (ws, req, rawPath) => {
     const [targetHost, targetPortStr] = targetProxy.split(":");
     const targetPort = parseInt(targetPortStr, 10);
 
-    // Bedakan penanganan port TLS vs Non-TLS
-    const isTlsPort = [443, 2053, 8443, 2083, 2096].includes(targetPort);
-    
-    let targetSocket;
+    let clientSocket = null;
+    let isConnected = false;
+    const messageQueue = [];
 
-    if (isTlsPort) {
-        // Menggunakan TLS Stream Passthrough untuk menghindari handshake error
-        targetSocket = tls.connect(targetPort, targetHost, { rejectUnauthorized: false }, () => {
-            ws.on('message', (chunk) => {
-                if (targetSocket.writable) targetSocket.write(chunk);
-            });
-        });
-    } else {
-        targetSocket = net.connect(targetPort, targetHost, () => {
-            ws.on('message', (chunk) => {
-                if (targetSocket.writable) targetSocket.write(chunk);
-            });
-        });
-    }
+    ws.on('message', (data) => {
+        const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
 
-    targetSocket.on('data', (data) => {
-        if (ws.readyState === ws.OPEN) ws.send(data);
+        if (!clientSocket) {
+            const cleanData = parseV2RayHeader(chunk);
+
+            clientSocket = net.createConnection({ host: targetHost, port: targetPort }, () => {
+                isConnected = true;
+                clientSocket.write(cleanData);
+                while (messageQueue.length > 0) {
+                    clientSocket.write(messageQueue.shift());
+                }
+            });
+
+            clientSocket.on('data', (remoteData) => {
+                if (ws.readyState === ws.OPEN) {
+                    ws.send(remoteData);
+                }
+            });
+
+            clientSocket.on('error', () => {
+                ws.close();
+                if (clientSocket) clientSocket.destroy();
+            });
+
+            clientSocket.on('close', () => ws.close());
+        } else if (isConnected) {
+            clientSocket.write(chunk);
+        } else {
+            messageQueue.push(chunk);
+        }
     });
 
-    targetSocket.on('error', () => ws.close());
-    targetSocket.on('close', () => ws.close());
-    ws.on('close', () => targetSocket.destroy());
-    ws.on('error', () => targetSocket.destroy());
+    ws.on('close', () => {
+        if (clientSocket) clientSocket.destroy();
+    });
+
+    ws.on('error', () => {
+        if (clientSocket) clientSocket.destroy();
+    });
 });
 
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => {
+    console.log(`Server Railway aktif port ${PORT}`);
+});
