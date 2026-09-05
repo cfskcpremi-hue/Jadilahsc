@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const PORT = process.env.PORT || 3000;
 const SYSTEM_UUID = process.env.SYSTEM_UUID || "c48619fe-8f02-49e0-b9e9-edf763e17e21";
 
-// Mapping IP Server Target
+// Mapping Proxy Outbound Target
 const PROXY_MAP = {
     "trojanws-deneva": "202.155.95.132:443",
     "vlessws-deneva": "202.155.95.132:443",
@@ -31,7 +31,7 @@ function generateHMAC(secret, message) {
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ server, perMessageDeflate: false });
 
 function buildDashboardHTML(host, uuid) {
     return `<!DOCTYPE html>
@@ -130,61 +130,27 @@ app.get(['/', '/dashboard'], (req, res) => {
     res.send(buildDashboardHTML(req.headers.host, SYSTEM_UUID));
 });
 
-server.on('upgrade', (request, socket, head) => {
-    const url = new URL(request.url, `http://${request.headers.host}`);
-    const segments = url.pathname.split('/').filter(Boolean);
-
-    let rawPath = segments[0] || "";
-    let exp = parseInt(segments[1] || "0", 10);
-    let sig = segments[2] || "";
-    let clientUid = segments[3] || "";
-
-    if (!exp) exp = parseInt(url.searchParams.get("exp") || "0", 10);
-    if (!sig) sig = url.searchParams.get("sig") || "";
-    if (!clientUid) clientUid = url.searchParams.get("uid") || "";
-
-    const now = Math.floor(Date.now() / 1000);
-
-    if (!exp || !sig || now > exp) {
-        socket.write('HTTP/1.1 403 Forbidden\r\n\r\nExpired Account');
-        socket.destroy();
-        return;
-    }
-
-    const expectedSig = generateHMAC(SYSTEM_UUID, `${rawPath}:${clientUid}:${exp}`);
-    if (sig !== expectedSig) {
-        socket.write('HTTP/1.1 403 Forbidden\r\n\r\nInvalid Signature');
-        socket.destroy();
-        return;
-    }
-
-    wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit('connection', ws, request, rawPath);
-    });
-});
-
-// Parser Header VLESS & Trojan agar tidak error di Railway
+// Sniffer sederhana untuk membaca payload awal VLESS/Trojan
 function parseV2RayHeader(buffer) {
     if (buffer.length < 2) return buffer;
-    
-    // Trojan Parser
+    // Cek header Trojan (CRLF di index 56-57)
     if (buffer.length >= 58 && buffer[56] === 0x0d && buffer[57] === 0x0a) {
         return buffer.slice(58);
     }
-
-    // VLESS Parser
+    // Cek header VLESS (Version 0)
     if (buffer[0] === 0) {
         const optLength = buffer[17];
         return buffer.slice(19 + optLength);
     }
-
     return buffer;
 }
 
-wss.on('connection', (ws, req, rawPath) => {
+wss.on('connection', (ws, req) => {
+    const rawPath = req.url.split('/')[1] || "";
     const targetProxy = PROXY_MAP[rawPath];
+    
     if (!targetProxy) {
-        ws.close();
+        ws.close(1000, "Invalid Target Path");
         return;
     }
 
@@ -195,23 +161,24 @@ wss.on('connection', (ws, req, rawPath) => {
     let isConnected = false;
     const messageQueue = [];
 
-    ws.on('message', (data) => {
-        const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    ws.on('message', (message) => {
+        const chunk = Buffer.isBuffer(message) ? message : Buffer.from(message);
 
         if (!clientSocket) {
-            const cleanData = parseV2RayHeader(chunk);
+            const cleanPayload = parseV2RayHeader(chunk);
 
+            // Buka socket TCP ke target outbound
             clientSocket = net.createConnection({ host: targetHost, port: targetPort }, () => {
                 isConnected = true;
-                clientSocket.write(cleanData);
+                clientSocket.write(cleanPayload);
                 while (messageQueue.length > 0) {
                     clientSocket.write(messageQueue.shift());
                 }
             });
 
-            clientSocket.on('data', (remoteData) => {
+            clientSocket.on('data', (data) => {
                 if (ws.readyState === ws.OPEN) {
-                    ws.send(remoteData);
+                    ws.send(data);
                 }
             });
 
@@ -238,5 +205,5 @@ wss.on('connection', (ws, req, rawPath) => {
 });
 
 server.listen(PORT, () => {
-    console.log(`Server Railway aktif port ${PORT}`);
+    console.log(`Server Railway aktif pada port ${PORT}`);
 });
